@@ -1,0 +1,44 @@
+# Pinned to the versions this project was built and tested against.
+# Regenerate with: pip freeze > requirements.txt
+
+# --- web framework ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32
+
+# --- database ---
+SQLAlchemy==2.0.52
+alembic==1.19.1
+# For PostgreSQL, additionally install:
+psycopg[binary]==3.2.*
+
+# --- validation and settings ---
+pydantic==2.13.4
+pydantic-settings==2.15.0
+email-validator==2.3.0
+python-dotenv==1.2.3
+
+# --- auth ---
+PyJWT==2.13.0
+argon2-cffi==25.1.0
+
+# --- documents (invoices, receipts, insurance statements) ---
+# reportlab rather than WeasyPrint: WeasyPrint needs system cairo/pango, which
+# is exactly the dependency that turns "deploy the backend" into a support
+# ticket. reportlab is pure Python plus Pillow, and its table layout is what the
+# line-item and session-date tables are built on.
+reportlab==5.0.1
+pillow==12.3.0
+
+# --- outbound providers (WhatsApp Cloud API, SMS gateways) ---
+# Also used by the test client, but it is a runtime dependency now that the
+# provider clients import it.
+httpx==0.28.1
+
+# --- dev / test ---
+pytest==9.1.1
+# Reads generated PDFs back so tests can assert on their *text*, not just that
+# bytes came out. A document missing the bill number renders perfectly.
+pypdf==6.16.2
+# Coverage measurement: `pytest --cov=app --cov-report=term-missing`
+pytest-cov==7.1.0
