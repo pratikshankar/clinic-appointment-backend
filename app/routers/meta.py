@@ -9,7 +9,12 @@ from app.config import settings
 router = APIRouter(tags=["Meta"])
 
 
-@router.get("/health", summary="Liveness and database connectivity check")
+
+@router.api_route(
+    "/health",
+    methods=["GET", "HEAD"],
+    summary="Liveness and database connectivity check",
+)
 def health(db: DbSession):
     try:
         db.execute(text("SELECT 1"))
