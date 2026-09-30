@@ -12,6 +12,7 @@ from app.models.clinic import Clinic, ClinicBreak, ClinicHoliday, ClinicWorkingH
 from app.models.enums import (
     CAPACITY_CONSUMING_STATUSES,
     AdjustmentType,
+    PointsTransactionType,
     AppointmentAction,
     AppointmentStatus,
     AuditAction,
@@ -25,10 +26,19 @@ from app.models.enums import (
     PackageStatus,
     PaymentMethod,
     PaymentStatus,
+    RefundAttachmentType,
+    RefundPaymentMethod,
+    RefundStatus,
+    ReferralStatus,
     RoleName,
 )
 from app.models.notification import Notification, NotificationAcknowledgement
+from app.models.push_subscription import PushSubscription
 from app.models.patient import Patient, PatientSource
+from app.models.prescription import Prescription
+from app.models.physio_points import PhysioPointsLedger
+from app.models.refund import RefundAttachment, RefundRequest
+from app.models.referral import ReferralRecord
 from app.models.service_item import ServiceItem
 from app.models.session import PatientSession, TreatmentPackage
 from app.models.user import ClinicUser, Role, User
@@ -51,11 +61,18 @@ __all__ = [
     "User",
     "Notification",
     "NotificationAcknowledgement",
+    "PushSubscription",
     "Patient",
     "PatientSource",
+    "Prescription",
+    "PhysioPointsLedger",
+    "PointsTransactionType",
     "ServiceItem",
     "PatientSession",
     "TreatmentPackage",
+    "RefundRequest",
+    "RefundAttachment",
+    "ReferralRecord",
     # enums
     "CAPACITY_CONSUMING_STATUSES",
     "AdjustmentType",
@@ -72,5 +89,9 @@ __all__ = [
     "PackageStatus",
     "PaymentMethod",
     "PaymentStatus",
+    "RefundAttachmentType",
+    "RefundPaymentMethod",
+    "RefundStatus",
+    "ReferralStatus",
     "RoleName",
 ]

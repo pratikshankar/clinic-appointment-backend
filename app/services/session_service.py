@@ -18,6 +18,8 @@ Two behaviours follow from that:
 import logging
 from datetime import date, datetime, timezone
 
+from app.utils.timezone import local_today
+
 from fastapi import Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -143,7 +145,7 @@ def create_package(
         sessions_registered=payload.sessions_registered,
         sessions_taken=payload.sessions_taken,
         price_per_session=payload.price_per_session,
-        start_date=payload.start_date or date.today(),
+        start_date=payload.start_date or local_today(),
         end_date=payload.end_date,
         notes=payload.notes,
         created_by_user_id=user.id,
@@ -170,6 +172,11 @@ def create_package(
         ),
         request=request,
     )
+
+    # Auto-trigger referral credit when the first qualifying package (≥5 sessions) is registered.
+    if payload.sessions_registered >= 5:
+        from app.services import referral_service
+        referral_service.maybe_auto_credit(db, patient=patient, package=package, actor=user, request=request)
 
     bill = None
     if not payload.skip_billing and payload.gross_amount > 0:
@@ -198,7 +205,7 @@ def create_package(
                 # now; a patient paying today for a course beginning next month
                 # would otherwise get an invoice dated next month, and the
                 # payment would land in the wrong month's revenue.
-                bill_date=date.today(),
+                bill_date=local_today(),
                 discount_amount=payload.discount_amount,
                 payment=payload.payment,
                 package_id=package.id,
@@ -293,6 +300,13 @@ def cancel_package(
 
     package.status = PackageStatus.CANCELLED
     package.notes = " | ".join(filter(None, [package.notes, f"Cancelled: {reason}" if reason else "Cancelled"]))
+
+    # Void any pending referral credits tied to this package
+    from app.services import referral_service
+    referral_service.void_for_package(
+        db, package.id,
+        reason=f"Package cancelled: {reason}" if reason else "Package cancelled",
+    )
 
     audit_service.record(
         db,
@@ -452,7 +466,7 @@ def log_session(
     appointment is not completed either.
     """
     patient = patient_service.get_patient(db, user, patient_id)
-    session_date = payload.session_date or date.today()
+    session_date = payload.session_date or local_today()
     warnings: list[str] = []
 
     # --- appointment, if this session came from one ---
@@ -524,9 +538,7 @@ def log_session(
         appointment_id=appointment.id if appointment else None,
         session_number=_next_session_number(db, patient.id, package.id if package else None),
         session_date=session_date,
-        # Defaults to whoever is recording it, which is right for a therapist and
-        # overridable when reception logs on someone's behalf.
-        therapist_user_id=payload.therapist_user_id or user.id,
+        therapist_user_id=payload.therapist_user_id,
         treatment_provided=payload.treatment_provided,
         notes=payload.notes,
         remarks=payload.remarks,
@@ -766,7 +778,7 @@ def list_sessions(
 
 def session_counters(db: Session, user: User, clinic_id: int | None = None) -> dict:
     """Tallies for the sessions screen."""
-    today = date.today()
+    today = local_today()
 
     def count(*conditions) -> int:
         stmt = select(func.count()).select_from(PatientSession).where(

@@ -109,19 +109,39 @@ class BillLineInput(BaseModel):
         return (self.unit_price * self.quantity).quantize(TWO_PLACES)
 
 
-class PaymentInput(BaseModel):
-    """Money actually received. `reference_number` is the UPI/card/transaction id."""
+class PaymentSplit(BaseModel):
+    """One leg of a split payment — a method and the amount paid via that method."""
 
-    amount: Decimal = Field(gt=0, le=10_000_000)
     payment_method: PaymentMethod
+    amount: Decimal = Field(gt=0, le=10_000_000)
     reference_number: str | None = Field(default=None, max_length=100)
-    payment_date: date | None = None
-    notes: str | None = Field(default=None, max_length=500)
 
-    @field_validator("reference_number", "notes")
+    @field_validator("reference_number")
     @classmethod
     def _clean(cls, value):
         return clean_text(value)
+
+
+class PaymentInput(BaseModel):
+    """Money actually received.
+
+    A single payment can span multiple methods (split payment). Each split
+    becomes its own Payment row; they share a payment_date and notes.
+    For a plain single-method payment, pass a list with one split.
+    """
+
+    splits: list[PaymentSplit] = Field(min_length=1)
+    payment_date: date | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+    @field_validator("notes")
+    @classmethod
+    def _clean(cls, value):
+        return clean_text(value)
+
+    @property
+    def total_amount(self) -> Decimal:
+        return sum((s.amount for s in self.splits), Decimal("0.00"))
 
 
 class BillCreate(BaseModel):
@@ -240,6 +260,73 @@ class BillRead(ORMModel):
         }
 
 
+class BillItemUpdate(BaseModel):
+    """Corrected values for one existing line item on a bill."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    description: str = Field(min_length=1, max_length=255)
+    quantity: int = Field(default=1, ge=1, le=1000)
+    unit_price: Decimal = Field(ge=0, le=1_000_000)
+
+    @field_validator("description")
+    @classmethod
+    def _clean(cls, value):
+        cleaned = clean_text(value)
+        if not cleaned:
+            raise ValueError("Each charge needs a description")
+        return cleaned
+
+    @property
+    def amount(self) -> Decimal:
+        return (self.unit_price * self.quantity).quantize(TWO_PLACES)
+
+
+class BillUpdate(BaseModel):
+    """Fields a staff member can correct after a bill is created."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bill_date: date | None = None
+    notes: str | None = None
+    discount_amount: Decimal | None = Field(default=None, ge=0)
+    items: list[BillItemUpdate] | None = None
+
+    @field_validator("notes")
+    @classmethod
+    def _clean(cls, value):
+        return clean_text(value)
+
+
+class PaymentUpdate(BaseModel):
+    """Correct a data-entry mistake on a recorded payment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    payment_date: date | None = None
+    payment_method: PaymentMethod | None = None
+    reference_number: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=500)
+    # Amount correction for genuine data-entry mistakes (e.g. 7200 typed instead of
+    # 6500). Changing this recalculates the bill's amount_paid and payment_status.
+    amount: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000"))
+
+    @field_validator("reference_number", "notes")
+    @classmethod
+    def _clean(cls, value):
+        return clean_text(value)
+
+
+class PaymentModeBreakdown(BaseModel):
+    """Cash / UPI / Card split for a date range — used by the billing page."""
+
+    cash: Decimal = Decimal("0.00")
+    upi: Decimal = Decimal("0.00")
+    card: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
+
+
 class BillCounters(BaseModel):
     """Header tallies.
 
@@ -271,6 +358,8 @@ class BillSummaryRow(ORMModel):
     balance_amount: Decimal
     payment_status: PaymentStatus
     status: BillStatus
+    #: Set only when listing by payment date — amount paid within the requested period.
+    amount_paid_in_period: Decimal | None = None
 
     @model_validator(mode="before")
     @classmethod

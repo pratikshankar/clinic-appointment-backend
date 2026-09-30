@@ -22,9 +22,14 @@ from app.routers import (
     notifications,
     patient_sources,
     patients,
+    physio_points,
+    prescriptions,
+    push,
+    referral,
     reports,
     sessions,
     users,
+    refund,
     whatsapp,
 )
 from app.utils.error_handlers import register_error_handlers
@@ -43,7 +48,7 @@ class _SuppressPollingRoutes(logging.Filter):
     floods the terminal without adding diagnostic value. Genuine errors still
     appear because uvicorn only calls this logger for 2xx responses.
     """
-    _SUPPRESS = {"/api/notifications/counters", "/api/health", "/api/whatsapp/webhook"}
+    _SUPPRESS = {"/api/notifications/counters", "/api/health", "/api/whatsapp/webhook", "/api/push/vapid-public-key"}
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
@@ -183,7 +188,12 @@ app.include_router(billing.document_router, prefix=api_prefix)
 app.include_router(reports.router, prefix=api_prefix)
 app.include_router(audit.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
+app.include_router(refund.router, prefix=api_prefix)
+app.include_router(physio_points.router, prefix=api_prefix)
+app.include_router(prescriptions.router, prefix=api_prefix)
+app.include_router(referral.router, prefix=api_prefix)
 app.include_router(whatsapp.router, prefix=api_prefix)
+app.include_router(push.router, prefix=api_prefix)
 
 
 @app.get("/docs", include_in_schema=False)

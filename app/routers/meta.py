@@ -9,7 +9,6 @@ from app.config import settings
 router = APIRouter(tags=["Meta"])
 
 
-
 @router.api_route(
     "/health",
     methods=["GET", "HEAD"],

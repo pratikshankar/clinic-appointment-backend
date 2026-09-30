@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Response
 
-from app.auth.dependencies import ClinicStaffUser, DbSession
+from app.auth.dependencies import AdminOrSuperadminUser, DbSession
 from app.services import report_service
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -75,7 +75,7 @@ def _run(
 )
 def month_comparison(
     db: DbSession,
-    current_user: ClinicStaffUser,
+    current_user: AdminOrSuperadminUser,
     as_of: Annotated[date | None, Query(description="Compare up to this day of the month")] = None,
     months: Annotated[int, Query(ge=2, le=12)] = 4,
     clinic_id: int | None = None,
@@ -118,7 +118,7 @@ ReportName = Literal[
 def run_report(
     name: ReportName,
     db: DbSession,
-    current_user: ClinicStaffUser,
+    current_user: AdminOrSuperadminUser,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
     clinic_id: int | None = None,

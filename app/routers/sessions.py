@@ -25,7 +25,8 @@ from app.schemas.session import (
     SessionUpdate,
     SessionVoid,
 )
-from app.services import session_service
+from app.services import referral_service, session_service
+from app.schemas.referral import PackageRedeemReferralCredit, PackageRedeemReferredCredit
 
 # Packages and sessions hang off a patient; the flat routers below handle
 # operations on a single record by id.
@@ -107,6 +108,47 @@ def update_package(
     """`sessions_taken` cannot be set here -- it moves only by logging or voiding
     a session."""
     package = session_service.update_package(
+        db, current_user, package_id, payload, request=request
+    )
+    return PackageRead.model_validate(package)
+
+
+@package_router.post(
+    "/{package_id}/apply-referral-credit",
+    response_model=PackageRead,
+    summary="Redeem referral session credits onto a package",
+)
+def apply_referral_credit(
+    package_id: int,
+    payload: PackageRedeemReferralCredit,
+    request: Request,
+    db: DbSession,
+    current_user: ClinicStaffUser,
+):
+    """Deducts `sessions` from the patient's referral credit balance and adds them
+    to this package's sessions_registered. Fails if the balance is insufficient."""
+    package = referral_service.redeem_credit_to_package(
+        db, current_user, package_id, payload, request=request
+    )
+    return PackageRead.model_validate(package)
+
+
+@package_router.post(
+    "/{package_id}/apply-referred-credit",
+    response_model=PackageRead,
+    summary="Redeem referred-patient session credits onto a package (≥5 sessions required)",
+)
+def apply_referred_credit(
+    package_id: int,
+    payload: PackageRedeemReferredCredit,
+    request: Request,
+    db: DbSession,
+    current_user: ClinicStaffUser,
+):
+    """Deducts `sessions` from the patient's referred_session_credits balance and adds
+    them to this package. Package must have ≥5 sessions registered. Fails if the
+    patient's qualifying package was cancelled (balance is zeroed on cancellation)."""
+    package = referral_service.redeem_referred_credit_to_package(
         db, current_user, package_id, payload, request=request
     )
     return PackageRead.model_validate(package)

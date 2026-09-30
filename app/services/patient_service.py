@@ -19,6 +19,8 @@ second clinic. The resolution:
 """
 
 from datetime import date
+
+from app.utils.timezone import local_today
 from decimal import Decimal
 
 from fastapi import Request
@@ -406,7 +408,7 @@ def create_patient(
         diagnosis=payload.diagnosis,
         source_id=payload.source_id,
         source_detail=payload.source_detail,
-        registration_date=payload.registration_date or date.today(),
+        registration_date=payload.registration_date or local_today(),
         primary_clinic_id=clinic_id,
         created_by_user_id=actor.id,
         is_profile_complete=is_complete(
@@ -418,6 +420,11 @@ def create_patient(
     )
     db.add(patient)
     db.flush()
+
+    # Set referral_code now that patient_code is assigned.
+    patient.referral_code = f"REF-{patient.patient_code}"
+    if payload.referred_by_code:
+        patient.referred_by_code = payload.referred_by_code.strip().upper()
 
     audit_service.record(
         db,

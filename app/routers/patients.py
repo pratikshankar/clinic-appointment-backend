@@ -211,6 +211,8 @@ def get_patient_profile(patient_id: int, db: DbSession, current_user: ClinicStaf
         total_paid=data["total_paid"],
         total_outstanding=data["total_outstanding"],
         scoped_to_your_clinics=data["scoped_to_your_clinics"],
+        referral_session_credits=data["patient"].referral_session_credits,
+        referred_session_credits=data["patient"].referred_session_credits,
     )
 
 

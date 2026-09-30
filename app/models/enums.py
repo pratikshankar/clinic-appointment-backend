@@ -88,6 +88,7 @@ class PaymentMethod(StrEnum):
     CARD = "CARD"
     BANK_TRANSFER = "BANK_TRANSFER"
     OTHER = "OTHER"
+    POINTS = "POINTS"  # Physio Points redemption
 
 
 class BillItemType(StrEnum):
@@ -101,6 +102,16 @@ class AdjustmentType(StrEnum):
     CREDIT_NOTE = "CREDIT_NOTE"
     CANCELLATION = "CANCELLATION"
     CORRECTION = "CORRECTION"
+
+
+class PointsTransactionType(StrEnum):
+    EARNED = "EARNED"
+    REDEEMED = "REDEEMED"
+    REFUND_REVOKE = "REFUND_REVOKE"
+    REFUND_RESTORE = "REFUND_RESTORE"
+    MANUAL_CREDIT = "MANUAL_CREDIT"
+    MANUAL_DEBIT = "MANUAL_DEBIT"
+    EXPIRED = "EXPIRED"
 
 
 class NotificationType(StrEnum):
@@ -126,6 +137,29 @@ class MessageStatus(StrEnum):
     SKIPPED = "SKIPPED"
 
 
+class RefundStatus(StrEnum):
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    COMPLETED = "COMPLETED"
+
+
+class RefundPaymentMethod(StrEnum):
+    BANK_TRANSFER = "BANK_TRANSFER"
+    UPI = "UPI"
+
+
+class RefundAttachmentType(StrEnum):
+    CANCELLATION_DOCUMENT = "CANCELLATION_DOCUMENT"
+    PAYMENT_PROOF = "PAYMENT_PROOF"
+
+
+class ReferralStatus(StrEnum):
+    PENDING = "PENDING"      # referred patient registered; waiting for credit threshold
+    CREDITED = "CREDITED"    # credit applied to referrer's package
+    VOIDED = "VOIDED"        # referred package cancelled/refunded before credit applied
+
+
 class AuditAction(StrEnum):
     LOGIN = "LOGIN"
     LOGIN_FAILED = "LOGIN_FAILED"
@@ -143,3 +177,10 @@ class AuditAction(StrEnum):
     BILL_GENERATED = "BILL_GENERATED"
     PAYMENT_RECORDED = "PAYMENT_RECORDED"
     NOTIFICATION_ACKNOWLEDGED = "NOTIFICATION_ACKNOWLEDGED"
+    REFUND_INITIATED = "REFUND_INITIATED"
+    REFUND_APPROVED = "REFUND_APPROVED"
+    REFUND_REJECTED = "REFUND_REJECTED"
+    REFUND_COMPLETED = "REFUND_COMPLETED"
+    REFERRAL_CREATED = "REFERRAL_CREATED"
+    REFERRAL_CREDITED = "REFERRAL_CREDITED"
+    REFERRAL_VOIDED = "REFERRAL_VOIDED"

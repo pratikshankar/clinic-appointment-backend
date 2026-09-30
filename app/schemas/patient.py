@@ -90,6 +90,9 @@ class PatientCreate(PatientBase):
 
     primary_clinic_id: int | None = None
     registration_date: date | None = None
+    #: Optional referral code supplied by the patient at registration. If valid,
+    #: a referral link is created and auto-credited when the patient buys ≥5 sessions.
+    referred_by_code: str | None = Field(default=None, max_length=30)
 
 
 class PatientQuickCreate(BaseModel):
@@ -224,6 +227,14 @@ class PatientRead(PatientCard):
     #: Whether the patient currently has a package with sessions left. Filled in
     #: by the router from one batched query, not per row.
     has_active_package: bool | None = None
+    #: Credits earned as the referrer — redeemable on any package.
+    referral_session_credits: int = 0
+    #: Credits earned as the referred patient — redeemable only on packages with ≥5 sessions.
+    referred_session_credits: int = 0
+    #: Unique shareable referral code, e.g. REF-PT-000042.
+    referral_code: str | None = None
+    #: Referral code used when this patient registered (if any).
+    referred_by_code: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -263,6 +274,10 @@ class PatientRead(PatientCard):
             "is_profile_complete": value.is_profile_complete,
             "is_active": value.is_active,
             "created_at": value.created_at.date() if value.created_at else None,
+            "referral_session_credits": value.referral_session_credits,
+            "referred_session_credits": value.referred_session_credits,
+            "referral_code": value.referral_code,
+            "referred_by_code": value.referred_by_code,
         }
 
 
@@ -366,3 +381,7 @@ class PatientProfile(BaseModel):
     total_outstanding: Decimal = Decimal("0.00")
     #: True when the timeline was filtered to the caller's clinics.
     scoped_to_your_clinics: bool = False
+    #: Credits as referrer — redeemable on any package.
+    referral_session_credits: int = 0
+    #: Credits as referred patient — redeemable on packages with ≥5 sessions only.
+    referred_session_credits: int = 0

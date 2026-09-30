@@ -7,6 +7,8 @@ caller is allowed to see -- never a placeholder or a fabricated figure.
 from datetime import date
 from decimal import Decimal
 
+from app.utils.timezone import local_today
+
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,7 @@ from app.models import (
     Notification,
     Patient,
     PatientSession,
+    Payment,
     RoleName,
     User,
 )
@@ -29,6 +32,16 @@ from app.schemas.dashboard import ClinicPerformance, DashboardCounters, Dashboar
 
 #: Statuses that mean "still to happen today".
 _PENDING_STATUSES = (AppointmentStatus.BOOKED, AppointmentStatus.CONFIRMED)
+
+#: Statuses that represent a real, non-voided appointment slot.
+#: CANCELLED and RESCHEDULED are excluded — they no longer occupy the slot.
+_ACTIVE_STATUSES = (
+    AppointmentStatus.BOOKED,
+    AppointmentStatus.CONFIRMED,
+    AppointmentStatus.CHECKED_IN,
+    AppointmentStatus.COMPLETED,
+    AppointmentStatus.NO_SHOW,
+)
 
 
 _ZERO = Decimal("0.00")
@@ -74,20 +87,26 @@ def _bill_totals(db: Session, clinic_ids: list[int] | None) -> tuple[Decimal, De
 
 
 def _month_collected(db: Session, clinic_ids: list[int] | None, today: date) -> Decimal:
-    stmt = _scope(
-        select(func.coalesce(func.sum(Bill.amount_paid), 0)).where(
+    # Use the payments table keyed on payment_date, not bill.amount_paid keyed on
+    # bill_date. The latter inflates the figure when a bill is created in one month
+    # but has payments from a prior month (e.g. retrospective data entry).
+    stmt = (
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .select_from(Payment)
+        .join(Bill, Payment.bill_id == Bill.id)
+        .where(
             Bill.status != BillStatus.CANCELLED,
-            Bill.bill_date >= today.replace(day=1),
-            Bill.bill_date <= today,
-        ),
-        Bill.clinic_id,
-        clinic_ids,
+            Payment.payment_date >= today.replace(day=1),
+            Payment.payment_date <= today,
+        )
     )
+    if clinic_ids is not None:
+        stmt = stmt.where(Bill.clinic_id.in_(clinic_ids or [-1]))
     return _money(db.execute(stmt).scalar_one())
 
 
 def build_dashboard(db: Session, user: User, today: date | None = None) -> DashboardResponse:
-    today = today or date.today()
+    today = today or local_today()
     clinic_ids = permissions.accessible_clinic_ids(db, user)
     role = user.role_name
     counters = DashboardCounters()
@@ -95,7 +114,11 @@ def build_dashboard(db: Session, user: User, today: date | None = None) -> Dashb
     # --- appointments (all roles) ---
     appts = _scope(select(Appointment.id), Appointment.clinic_id, clinic_ids)
     counters.appointments_today = _count(
-        db, appts.where(Appointment.appointment_date == today)
+        db,
+        appts.where(
+            Appointment.appointment_date == today,
+            Appointment.status.in_(_ACTIVE_STATUSES),
+        ),
     )
     counters.completed_today = _count(
         db,
@@ -204,6 +227,7 @@ def _clinic_breakdown(db: Session, clinics, today: date) -> list[ClinicPerforman
             .where(
                 Appointment.clinic_id.in_(clinic_ids),
                 Appointment.appointment_date == today,
+                Appointment.status.in_(_ACTIVE_STATUSES),
             )
             .group_by(Appointment.clinic_id)
         ).all()

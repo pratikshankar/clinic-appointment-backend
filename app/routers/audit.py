@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, model_validator
 
-from app.auth.dependencies import DbSession, SuperadminUser
+from app.auth.dependencies import AdminOrSuperadminUser, DbSession
 from app.models.enums import AuditAction
 from app.schemas.common import ORMModel, Page
 from app.services import audit_service
@@ -64,7 +64,7 @@ class AuditActionList(BaseModel):
 @router.get("", response_model=Page[AuditLogRead], summary="Browse the audit trail")
 def list_audit_logs(
     db: DbSession,
-    current_user: SuperadminUser,
+    current_user: AdminOrSuperadminUser,
     action: AuditAction | None = None,
     entity_type: str | None = None,
     clinic_id: int | None = None,
@@ -98,5 +98,5 @@ def list_audit_logs(
 
 
 @router.get("/actions", response_model=AuditActionList, summary="Known action types")
-def audit_actions(db: DbSession, current_user: SuperadminUser):
+def audit_actions(db: DbSession, current_user: AdminOrSuperadminUser):
     return AuditActionList(actions=[item.value for item in AuditAction])

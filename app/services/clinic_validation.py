@@ -17,6 +17,8 @@ Two categories, deliberately distinguished:
 from collections import defaultdict
 from datetime import date, time
 
+from app.utils.timezone import local_today
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -146,7 +148,7 @@ def overbooked_slots(
     promised is never invalidated by a configuration change. Those slots simply
     accept no new bookings until they fall below the new capacity.
     """
-    from_date = from_date or date.today()
+    from_date = from_date or local_today()
     rows = db.execute(
         select(
             Appointment.appointment_date,
@@ -176,7 +178,7 @@ def overbooked_slots(
 
 def future_appointment_count(db: Session, clinic_id: int, from_date: date | None = None) -> int:
     """Appointments still ahead of us at a clinic, used when deactivating it."""
-    from_date = from_date or date.today()
+    from_date = from_date or local_today()
     return db.execute(
         select(func.count())
         .select_from(Appointment)

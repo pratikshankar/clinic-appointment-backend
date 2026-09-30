@@ -71,7 +71,9 @@ class Settings(BaseSettings):
     DOCUMENT_FOOTER: str = ""
 
     # --- database ---
-    # SQLite for local development; swap for postgresql+psycopg://... later.
+    # Set USE_LOCAL_DB=true to force SQLite regardless of DATABASE_URL.
+    # Useful during local development when DATABASE_URL points at Supabase.
+    USE_LOCAL_DB: bool = False
     DATABASE_URL: str = "sqlite:///./clinic_management.db"
     SQL_ECHO: bool = False
     #: Create tables on startup. Convenient in development; in production use
@@ -113,6 +115,7 @@ class Settings(BaseSettings):
     #: Template IDs as created in MSG91 Email → Templates.
     MSG91_EMAIL_APPT_TEMPLATE_ID: str = ""
     MSG91_EMAIL_BILL_TEMPLATE_ID: str = ""
+    MSG91_EMAIL_PRESCRIPTION_TEMPLATE_ID: str = "template_29_09_2026_14_09_3"
     MSG91_EMAIL_TIMEOUT_SECONDS: int = 20
 
     WHATSAPP_PROVIDER: Literal["mock", "business_api"] = "mock"
@@ -139,9 +142,29 @@ class Settings(BaseSettings):
     #: it costs money per message and needs DLT registration to deliver at all.
     SMS_FALLBACK_ENABLED: bool = False
 
+    # --- Physio Points loyalty programme ---
+    #: Points earned per ₹100 paid. Default 10 means ₹100 → 10 pts.
+    #: Set to 0 to disable earning entirely.
+    PHYSIO_POINTS_EARN_PER_100: int = 10
+    #: Rupee value of one point when redeeming. Default 0.5 means 10 pts = ₹5.
+    #: Changing this only affects future redemptions; existing balances are unaffected.
+    PHYSIO_POINTS_REDEEM_VALUE: float = 0.5
+    #: Points expire after this many days. Default 365 (12 months).
+    PHYSIO_POINTS_EXPIRY_DAYS: int = 365
+
+    # --- locale ---
+    #: IANA timezone name used for all "today" / "this month" business-date
+    #: calculations. Defaults to IST. Override with CLINIC_TIMEZONE env var.
+    CLINIC_TIMEZONE: str = "Asia/Kolkata"
+
     # --- clinic defaults (seed script + clinic creation) ---
     DEFAULT_SLOT_DURATION_MINUTES: int = 30
     DEFAULT_CAPACITY_PER_SLOT: int = 3
+
+    # --- Web Push / VAPID (optional — push is silently disabled when unset) ---
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_CONTACT_EMAIL: str = "admin@example.com"
 
     # --- seed credentials (development only) ---
     SEED_SUPERADMIN_USERNAME: str = "superadmin"
@@ -159,8 +182,15 @@ class Settings(BaseSettings):
         return value
 
     @property
+    def effective_database_url(self) -> str:
+        """The URL actually used to connect — SQLite when USE_LOCAL_DB is set."""
+        if self.USE_LOCAL_DB:
+            return "sqlite:///./clinic_management.db"
+        return self.DATABASE_URL
+
+    @property
     def is_sqlite(self) -> bool:
-        return self.DATABASE_URL.startswith("sqlite")
+        return self.effective_database_url.startswith("sqlite")
 
     @property
     def is_production(self) -> bool:
@@ -168,8 +198,8 @@ class Settings(BaseSettings):
 
     @property
     def safe_database_url(self) -> str:
-        """Database URL with any password removed, for logging."""
-        url = self.DATABASE_URL
+        """Effective database URL with any password removed, for logging."""
+        url = self.effective_database_url
         if "@" in url and "//" in url:
             scheme, _, rest = url.partition("//")
             credentials, _, host = rest.rpartition("@")

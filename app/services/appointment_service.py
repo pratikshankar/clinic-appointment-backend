@@ -24,6 +24,8 @@ Everything else here is bookkeeping: every status change appends to
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+
+from app.utils.timezone import local_today
 from zoneinfo import ZoneInfo
 
 _IST = ZoneInfo("Asia/Kolkata")
@@ -447,6 +449,7 @@ def book_existing_patient(
     db.commit()
     db.refresh(appointment)
     notification_service.deliver(db, queued)
+    notification_service.push_for_appointment(db, actor, appointment, notification_service.CREATED)
     return appointment, warnings
 
 
@@ -531,6 +534,7 @@ def book_new_patient(
     db.commit()
     db.refresh(appointment)
     notification_service.deliver(db, queued)
+    notification_service.push_for_appointment(db, actor, appointment, notification_service.CREATED)
     return appointment, [
         f"{patient.full_name} was registered as {patient.patient_code}. "
         "Complete their profile when they arrive."
@@ -579,7 +583,7 @@ def list_appointments(
         permissions.assert_clinic_access(db, user, clinic_id)
         stmt = stmt.where(Appointment.clinic_id == clinic_id)
 
-    today = date.today()
+    today = local_today()
     if window == "today":
         stmt = stmt.where(Appointment.appointment_date == today)
     elif window == "upcoming":
@@ -629,7 +633,7 @@ def list_appointments(
 
 def counters(db: Session, user: User, clinic_id: int | None = None) -> dict:
     """Tallies for the list header, in one pass per metric."""
-    today = date.today()
+    today = local_today()
 
     def count(*conditions) -> int:
         stmt = select(func.count()).select_from(Appointment).where(*conditions)
@@ -641,12 +645,25 @@ def counters(db: Session, user: User, clinic_id: int | None = None) -> dict:
         return db.execute(stmt).scalar_one()
 
     pending = (AppointmentStatus.BOOKED, AppointmentStatus.CONFIRMED)
+    active = (
+        AppointmentStatus.BOOKED,
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.CHECKED_IN,
+        AppointmentStatus.COMPLETED,
+        AppointmentStatus.NO_SHOW,
+    )
     return {
-        "today": count(Appointment.appointment_date == today),
+        "today": count(
+            Appointment.appointment_date == today,
+            Appointment.status.in_(active),
+        ),
         "upcoming": count(
             Appointment.appointment_date > today, Appointment.status.in_(pending)
         ),
-        "past": count(Appointment.appointment_date < today),
+        "past": count(
+            Appointment.appointment_date < today,
+            Appointment.status.in_(active),
+        ),
         "pending_today": count(
             Appointment.appointment_date == today, Appointment.status.in_(pending)
         ),
@@ -759,6 +776,7 @@ def change_status(
     db.commit()
     db.refresh(appointment)
     notification_service.deliver(db, queued)
+    notification_service.push_for_appointment(db, actor, appointment, event)
     return appointment
 
 
@@ -898,6 +916,7 @@ def reschedule(
     db.refresh(original)
     db.refresh(replacement)
     notification_service.deliver(db, queued)
+    notification_service.push_for_appointment(db, actor, replacement, notification_service.RESCHEDULED)
     return original, replacement, warnings
 
 

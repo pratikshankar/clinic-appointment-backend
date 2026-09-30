@@ -16,7 +16,13 @@ from app.config import settings
 from app.db.database import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Use effective_database_url so Alembic targets the same DB the app connects to
+# (SQLite when USE_LOCAL_DB=true, Supabase PostgreSQL otherwise).
+# configparser uses % for interpolation; escape literal % characters in the URL.
+config.set_main_option(
+    "sqlalchemy.url",
+    settings.effective_database_url.replace("%", "%%"),
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

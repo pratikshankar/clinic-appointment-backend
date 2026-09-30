@@ -85,6 +85,17 @@ class Patient(Base, TimestampMixin):
     #: False while only the minimal Admin-booking fields are filled in (Section 11).
     is_profile_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Sessions earned as the referrer — no package restriction on redemption.
+    referral_session_credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Sessions earned as the referred patient — redeemable only on packages with ≥5
+    #: sessions registered; zeroed if the qualifying package is cancelled.
+    referred_session_credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Shareable code the patient gives to friends. Format: REF-<patient_code>.
+    referral_code: Mapped[str | None] = mapped_column(String(30), unique=True, index=True, nullable=True)
+    #: Referral code the patient gave at registration. Triggers auto-credit on first ≥5 session package.
+    referred_by_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    #: Physio Points loyalty balance. 10 pts earned per ₹100 paid; 1 pt = ₹1 discount.
+    physio_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     @property
     def whatsapp_contact(self) -> str:

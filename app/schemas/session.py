@@ -204,14 +204,11 @@ class SessionCreate(BaseModel):
 
 
 class SessionUpdate(BaseModel):
-    """Only the clinical narrative is editable.
-
-    Date, patient and package are fixed: changing them would silently move a
-    session between counters. A wrong entry is voided instead.
-    """
+    """Clinical narrative and date are editable; package and patient are not."""
 
     model_config = ConfigDict(extra="forbid")
 
+    session_date: date | None = None
     treatment_provided: str | None = None
     notes: str | None = None
     remarks: str | None = None

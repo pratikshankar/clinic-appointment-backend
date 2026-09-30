@@ -14,6 +14,8 @@ import logging
 from datetime import date
 from decimal import Decimal
 
+from app.utils.timezone import local_today
+
 from fastapi import Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -33,7 +35,7 @@ from app.models import (
     ServiceItem,
     User,
 )
-from app.schemas.billing import BillCreate, BillLineInput, PaymentInput
+from app.schemas.billing import BillCreate, BillItemUpdate, BillLineInput, BillUpdate, PaymentInput, PaymentUpdate
 from app.services import audit_service, patient_service
 from app.utils.exceptions import DuplicateResourceError, NotFoundError, ValidationError
 from app.utils.identifiers import generate_bill_number
@@ -217,9 +219,9 @@ def build_bill(
         raise ValidationError("Discount cannot be greater than the subtotal")
     total = (subtotal - discount + tax).quantize(TWO_PLACES)
 
-    if payment is not None and money(payment.amount) > total:
+    if payment is not None and payment.total_amount > total:
         raise ValidationError(
-            f"Payment of {money(payment.amount)} is more than the bill total of {total}. "
+            f"Payment of {payment.total_amount} is more than the bill total of {total}. "
             "Reduce the amount, or add the extra as a separate charge."
         )
 
@@ -228,13 +230,13 @@ def build_bill(
         # Each separately registered clinic keeps its own invoice series.
         bill_number=generate_bill_number(
             db,
-            bill_date or date.today(),
+            bill_date or local_today(),
             series=clinic.bill_number_prefix if clinic else None,
         ),
         clinic_id=clinic_id,
         patient_id=patient.id,
         package_id=package_id,
-        bill_date=bill_date or date.today(),
+        bill_date=bill_date or local_today(),
         subtotal_amount=subtotal,
         discount_amount=discount,
         tax_amount=tax,
@@ -265,18 +267,30 @@ def build_bill(
         )
 
     if payment is not None:
-        db.add(
-            Payment(
+        from app.models.enums import PaymentMethod as PM
+        from app.services import physio_points_service
+        paid = Decimal("0.00")
+        initial_payments: list[Payment] = []
+        for split in payment.splits:
+            p = Payment(
                 bill_id=bill.id,
-                amount=money(payment.amount),
-                payment_method=payment.payment_method,
+                amount=money(split.amount),
+                payment_method=split.payment_method,
                 payment_date=payment.payment_date or bill.bill_date,
-                reference_number=payment.reference_number,
+                reference_number=split.reference_number,
                 received_by_user_id=user.id,
                 notes=payment.notes,
             )
-        )
-        bill.amount_paid = money(payment.amount)
+            db.add(p)
+            initial_payments.append(p)
+            paid += money(split.amount)
+        db.flush()  # get payment IDs
+        for p in initial_payments:
+            if p.payment_method == PM.POINTS:
+                physio_points_service.redeem_from_payment(db, p, bill, user)
+            else:
+                physio_points_service.earn_from_payment(db, p, bill, user)
+        bill.amount_paid = paid
 
     _apply_payment_status(bill)
     db.flush()
@@ -338,29 +352,61 @@ def add_payment(
     if bill.status == BillStatus.CANCELLED:
         raise ValidationError("This bill has been cancelled")
 
-    amount = money(payload.amount)
+    total_amount = payload.total_amount
     outstanding = bill.balance_amount
     if outstanding <= 0:
         raise ValidationError(f"Bill {bill.bill_number} is already fully paid")
-    if amount > outstanding:
+    if total_amount > outstanding:
         raise ValidationError(
             f"That is more than the {outstanding} outstanding on {bill.bill_number}"
         )
 
-    db.add(
-        Payment(
+    pay_date = payload.payment_date or local_today()
+
+    # Validate POINTS splits before touching the DB
+    from app.models.enums import PaymentMethod as PM
+    from app.services import physio_points_service
+    points_splits_total = sum(
+        s.amount for s in payload.splits if s.payment_method == PM.POINTS
+    )
+    if points_splits_total > 0:
+        from app.models.patient import Patient as _Patient
+        _patient = db.get(_Patient, bill.patient_id)
+        available = _patient.physio_points if _patient else 0
+        if int(points_splits_total) > available:
+            raise ValidationError(
+                f"Cannot redeem {int(points_splits_total)} Physio Points — only {available} available"
+            )
+
+    new_payments: list[Payment] = []
+    for split in payload.splits:
+        p = Payment(
             bill_id=bill.id,
-            amount=amount,
-            payment_method=payload.payment_method,
-            payment_date=payload.payment_date or date.today(),
-            reference_number=payload.reference_number,
+            amount=money(split.amount),
+            payment_method=split.payment_method,
+            payment_date=pay_date,
+            reference_number=split.reference_number,
             received_by_user_id=user.id,
             notes=payload.notes,
         )
-    )
-    bill.amount_paid = money(bill.amount_paid + amount)
+        db.add(p)
+        new_payments.append(p)
+    db.flush()  # get IDs for points ledger
+
+    for p in new_payments:
+        if p.payment_method == PM.POINTS:
+            physio_points_service.redeem_from_payment(db, p, bill, user)
+        else:
+            physio_points_service.earn_from_payment(db, p, bill, user)
+
+    bill.amount_paid = money(bill.amount_paid + total_amount)
     _apply_payment_status(bill)
 
+    split_desc = " + ".join(
+        f"{money(s.amount)} {s.payment_method.value}"
+        + (f" (ref {s.reference_number})" if s.reference_number else "")
+        for s in payload.splits
+    )
     audit_service.record(
         db,
         action=AuditAction.PAYMENT_RECORDED,
@@ -368,11 +414,122 @@ def add_payment(
         entity_type="bill",
         entity_id=bill.id,
         clinic_id=bill.clinic_id,
-        description=(
-            f"{amount} received on {bill.bill_number} by "
-            f"{payload.payment_method.value}"
-            + (f" (ref {payload.reference_number})" if payload.reference_number else "")
-        ),
+        description=f"{total_amount} received on {bill.bill_number}: {split_desc}",
+        request=request,
+    )
+    db.commit()
+    db.refresh(bill)
+    return bill
+
+
+def update_bill(
+    db: Session,
+    user: User,
+    bill_id: int,
+    payload: BillUpdate,
+    request: Request | None = None,
+) -> Bill:
+    """Correct bill_date, notes, line items or discount after a data-entry mistake."""
+    bill = get_bill(db, user, bill_id)
+    if bill.status == BillStatus.CANCELLED:
+        raise ValidationError("A cancelled bill cannot be edited")
+
+    changed: list[str] = []
+
+    # --- scalar fields ---
+    if payload.bill_date is not None:
+        bill.bill_date = payload.bill_date
+        changed.append("bill_date")
+    if payload.notes is not None:
+        bill.notes = payload.notes or None
+        changed.append("notes")
+
+    # --- line items ---
+    if payload.items is not None:
+        item_map: dict[int, BillItemUpdate] = {u.id: u for u in payload.items}
+        for bill_item in bill.items:
+            if bill_item.id in item_map:
+                upd = item_map[bill_item.id]
+                bill_item.description = upd.description
+                bill_item.quantity = upd.quantity
+                bill_item.unit_price = upd.unit_price
+                bill_item.amount = upd.amount
+        changed.append("items")
+
+    # --- recalculate totals when items or discount changed ---
+    if payload.items is not None or payload.discount_amount is not None:
+        subtotal = sum((item.amount for item in bill.items), Decimal("0.00")).quantize(TWO_PLACES)
+        discount = money(payload.discount_amount if payload.discount_amount is not None else bill.discount_amount)
+        if discount > subtotal:
+            raise ValidationError("Discount cannot be greater than the subtotal")
+        total = (subtotal - discount + bill.tax_amount).quantize(TWO_PLACES)
+        if total < bill.amount_paid:
+            raise ValidationError(
+                f"New total ({total}) cannot be less than the amount already paid ({bill.amount_paid}). "
+                "Reduce the payment first, or keep the total at or above what has been received."
+            )
+        bill.subtotal_amount = subtotal
+        bill.discount_amount = discount
+        bill.total_amount = total
+        _apply_payment_status(bill)
+        if payload.discount_amount is not None:
+            changed.append("discount")
+        changed.append("totals")
+
+    if not changed:
+        return bill
+
+    audit_service.record(
+        db,
+        action=AuditAction.UPDATED,
+        user=user,
+        entity_type="bill",
+        entity_id=bill.id,
+        clinic_id=bill.clinic_id,
+        description=f"Corrected {', '.join(changed)} on {bill.bill_number}",
+        request=request,
+    )
+    db.commit()
+    db.refresh(bill)
+    return bill
+
+
+def update_payment(
+    db: Session,
+    user: User,
+    payment_id: int,
+    payload: PaymentUpdate,
+    request: Request | None = None,
+) -> Bill:
+    """Correct date, method or reference on a recorded payment."""
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise NotFoundError(f"Payment {payment_id} was not found")
+    bill = get_bill(db, user, payment.bill_id)
+
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(payment, field, value)
+
+    # If the amount was corrected, recalculate the bill's running total.
+    if "amount" in data:
+        new_total = money(sum(p.amount for p in bill.payments))
+        if new_total > bill.total_amount:
+            raise ValidationError(
+                f"Corrected payment total ₹{new_total} would exceed "
+                f"bill total ₹{bill.total_amount}"
+            )
+        bill.amount_paid = new_total
+        _apply_payment_status(bill)
+
+    audit_service.record(
+        db,
+        action=AuditAction.UPDATED,
+        user=user,
+        entity_type="payment",
+        entity_id=payment_id,
+        clinic_id=bill.clinic_id,
+        description=f"Corrected {', '.join(data)} on payment {payment_id} ({bill.bill_number})",
         request=request,
     )
     db.commit()
@@ -399,10 +556,17 @@ def list_bills(
     payment_status: PaymentStatus | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    payment_date_from: date | None = None,
+    payment_date_to: date | None = None,
     search: str | None = None,
     offset: int = 0,
     limit: int = 50,
-) -> tuple[list[Bill], int]:
+) -> tuple[list[Bill], int, dict[int, Decimal]]:
+    """Return (bills, total_count, period_paid_map).
+
+    period_paid_map maps bill_id → amount paid within the payment date range.
+    It is empty when no payment date filter is active.
+    """
     stmt = select(Bill).options(*_BILL_LOADS)
 
     accessible = permissions.accessible_clinic_ids(db, user)
@@ -416,10 +580,22 @@ def list_bills(
         stmt = stmt.where(Bill.patient_id == patient_id)
     if payment_status is not None:
         stmt = stmt.where(Bill.payment_status == payment_status)
-    if date_from is not None:
-        stmt = stmt.where(Bill.bill_date >= date_from)
-    if date_to is not None:
-        stmt = stmt.where(Bill.bill_date <= date_to)
+
+    payment_date_filter = payment_date_from is not None or payment_date_to is not None
+    if payment_date_filter:
+        # Filter bills that have at least one payment in the requested period.
+        period_subq = select(Payment.bill_id).distinct()
+        if payment_date_from is not None:
+            period_subq = period_subq.where(Payment.payment_date >= payment_date_from)
+        if payment_date_to is not None:
+            period_subq = period_subq.where(Payment.payment_date <= payment_date_to)
+        stmt = stmt.where(Bill.id.in_(period_subq))
+    else:
+        if date_from is not None:
+            stmt = stmt.where(Bill.bill_date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(Bill.bill_date <= date_to)
+
     if search:
         pattern = f"%{search.strip().lower()}%"
         stmt = stmt.join(Patient, Bill.patient_id == Patient.id).where(
@@ -439,7 +615,23 @@ def list_bills(
         .scalars()
         .all()
     )
-    return list(rows), total
+    bills = list(rows)
+
+    # Build period_paid_map: amount paid per bill within the payment date range.
+    period_map: dict[int, Decimal] = {}
+    if payment_date_filter and bills:
+        pay_stmt = (
+            select(Payment.bill_id, func.sum(Payment.amount))
+            .where(Payment.bill_id.in_([b.id for b in bills]))
+            .group_by(Payment.bill_id)
+        )
+        if payment_date_from is not None:
+            pay_stmt = pay_stmt.where(Payment.payment_date >= payment_date_from)
+        if payment_date_to is not None:
+            pay_stmt = pay_stmt.where(Payment.payment_date <= payment_date_to)
+        period_map = {bill_id: money(amt) for bill_id, amt in db.execute(pay_stmt).all()}
+
+    return bills, total, period_map
 
 
 def billing_counters(db: Session, user: User, clinic_id: int | None = None) -> dict:
@@ -462,7 +654,7 @@ def billing_counters(db: Session, user: User, clinic_id: int | None = None) -> d
         .select_from(Payment)
         .join(Bill, Payment.bill_id == Bill.id)
         .where(
-            Payment.payment_date == date.today(),
+            Payment.payment_date == local_today(),
             Bill.status != BillStatus.CANCELLED,
             *([Bill.clinic_id.in_(accessible or [-1])] if accessible is not None else []),
             *([Bill.clinic_id == clinic_id] if clinic_id is not None else []),
@@ -476,6 +668,40 @@ def billing_counters(db: Session, user: User, clinic_id: int | None = None) -> d
         "outstanding": max(money(billed) - money(collected), Decimal("0.00")),
         "collected_today": money(today_collected),
     }
+
+
+def payment_mode_breakdown(
+    db: Session,
+    user: User,
+    clinic_id: int | None,
+    date_from: date | None,
+    date_to: date | None,
+) -> dict:
+    """Amount collected per payment method (CASH / UPI / CARD) for a date range."""
+    accessible = permissions.accessible_clinic_ids(db, user)
+    stmt = (
+        select(Payment.payment_method, func.coalesce(func.sum(Payment.amount), 0))
+        .select_from(Payment)
+        .join(Bill, Payment.bill_id == Bill.id)
+        .where(Bill.status != BillStatus.CANCELLED)
+        .group_by(Payment.payment_method)
+    )
+    if accessible is not None:
+        stmt = stmt.where(Bill.clinic_id.in_(accessible or [-1]))
+    if clinic_id is not None:
+        stmt = stmt.where(Bill.clinic_id == clinic_id)
+    if date_from is not None:
+        stmt = stmt.where(Payment.payment_date >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(Payment.payment_date <= date_to)
+
+    result: dict = {"cash": Decimal("0.00"), "upi": Decimal("0.00"), "card": Decimal("0.00"), "total": Decimal("0.00")}
+    for method, amount in db.execute(stmt).all():
+        key = method.lower() if isinstance(method, str) else method.value.lower()
+        if key in result:
+            result[key] = money(amount)
+        result["total"] = money(result["total"] + money(amount))
+    return result
 
 
 def package_line(

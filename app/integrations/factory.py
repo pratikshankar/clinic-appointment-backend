@@ -42,6 +42,7 @@ def get_email_service() -> EmailService:
             from_email=settings.MSG91_EMAIL_FROM,
             appt_template_id=settings.MSG91_EMAIL_APPT_TEMPLATE_ID,
             bill_template_id=settings.MSG91_EMAIL_BILL_TEMPLATE_ID,
+            prescription_template_id=settings.MSG91_EMAIL_PRESCRIPTION_TEMPLATE_ID,
             timeout=settings.MSG91_EMAIL_TIMEOUT_SECONDS,
         )
 

@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
+
+from app.utils.timezone import local_today
 from decimal import Decimal
 from functools import lru_cache
 from io import BytesIO
@@ -552,7 +554,7 @@ def receipt_number(payment, bill=None) -> str:
     number is derived rather than sequenced -- but a Physiocare receipt should
     still not look like a PainEasy one.
     """
-    year = (payment.payment_date or date.today()).year
+    year = (payment.payment_date or local_today()).year
     series = ""
     clinic = getattr(bill, "clinic", None) if bill is not None else None
     prefix = (getattr(clinic, "bill_number_prefix", None) or "").strip().upper()
@@ -728,7 +730,7 @@ def render_session_statement(package, sessions, bills) -> bytes:
             "TREATMENT STATEMENT",
             [
                 ("Statement no.", f"STM-{package.id:06d}"),
-                ("Issued", _date(date.today())),
+                ("Issued", _date(local_today())),
                 ("Status", "Final" if is_final else "Provisional"),
             ],
             brand,
@@ -897,3 +899,137 @@ def render_session_statement(package, sessions, bills) -> bytes:
         "Treatment and payment statement",
         brand,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Prescription
+# --------------------------------------------------------------------------- #
+def render_prescription(prx, patient, clinic, physio) -> bytes:
+    """Clinical prescription PDF.
+
+    Layout (top to bottom):
+      1. Brand header (logo + clinic name) | PRESCRIPTION / date / Rx no.
+      2. Two-column: Clinic address | Physiotherapist
+      3. Full-width patient info bar
+      4. Horizontal rule
+      5. Clinical sections: Chief Complaints, History, On Examination,
+         Diagnosis, Treatment, Home Protocol
+      6. Signature block
+    """
+    styles = _styles()
+    brand = brand_for(clinic) if clinic else Brand(
+        settings.BRAND_NAME, settings.BRAND_TAGLINE, _chain_logo(), ""
+    )
+
+    # Section helper — heading + body, full left margin aligned with the page
+    def _section(heading: str, body: str | None) -> list:
+        if not body or not body.strip():
+            return []
+        return [
+            Spacer(1, 5 * mm),
+            Paragraph(heading, styles["h2"]),
+            Paragraph(body.replace("\n", "<br/>"), styles["body"]),
+        ]
+
+    prx_date = getattr(prx, "created_at", None)
+    date_str = prx_date.strftime("%d %b %Y") if prx_date else ""
+    prx_id = f"PRX-{prx.id:05d}"
+
+    # ---- 1. Brand header --------------------------------------------------
+    story: list = [
+        _brand_header(
+            styles,
+            "PRESCRIPTION",
+            [("Date", date_str), ("Rx No.", prx_id)],
+            brand,
+        ),
+        Spacer(1, 5 * mm),
+    ]
+
+    # ---- 2. Clinic | Physiotherapist side-by-side -------------------------
+    physio_name = getattr(physio, "full_name", "—") if physio else "—"
+    reg_no = (getattr(physio, "registration_number", None) or "").strip() if physio else ""
+    physio_lines = [f"<b>{physio_name}</b>"]
+    if reg_no:
+        physio_lines.append(f"Reg. No. {reg_no}")
+
+    story.append(
+        _two_column(
+            styles,
+            "Clinic",
+            _clinic_lines(clinic) if clinic else [brand.name],
+            "Physiotherapist",
+            physio_lines,
+        )
+    )
+    story.append(Spacer(1, 5 * mm))
+
+    # ---- 3. Patient info bar (full width, tinted background) --------------
+    def _age_str():
+        if patient is None:
+            return ""
+        dob = getattr(patient, "date_of_birth", None)
+        age = getattr(patient, "age", None)
+        if dob:
+            return f"{(local_today() - dob).days // 365} yrs"
+        return f"{age} yrs" if age else ""
+
+    pat_name = getattr(patient, "full_name", "—") if patient else "—"
+    pat_code = getattr(patient, "patient_code", "") if patient else ""
+    pat_mobile = getattr(patient, "mobile", "") if patient else ""
+    pat_gender = ""
+    if patient and getattr(patient, "gender", None):
+        pat_gender = str(patient.gender.value).capitalize()
+    pat_age = _age_str()
+
+    detail_parts = [p for p in [pat_age, pat_gender, pat_code, pat_mobile] if p]
+    detail_str = "  ·  ".join(detail_parts)
+
+    pat_table = Table(
+        [[
+            Paragraph(f"<b>{pat_name}</b>", styles["body"]),
+            Paragraph(detail_str, styles["small"]),
+        ]],
+        colWidths=[90 * mm, 73 * mm],
+    )
+    pat_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), ZEBRA),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.5, RULE),
+    ]))
+    story.append(pat_table)
+
+    # ---- 4. Clinical sections --------------------------------------------
+    story += _section("Chief Complaints", prx.chief_complaint)
+    story += _section("Present and Past History", getattr(prx, "history", None))
+    story += _section("On Examination", getattr(prx, "on_examination", None))
+    story += _section("Diagnosis", prx.diagnosis)
+    story += _section("Treatment", prx.treatment_plan)
+    story += _section("Home Protocol", prx.home_protocol)
+    if getattr(prx, "notes", None):
+        story += _section("Notes", prx.notes)
+
+    # ---- 5. Signature block ----------------------------------------------
+    story.append(Spacer(1, 12 * mm))
+    sig_line = Table(
+        [[Paragraph("___________________________", styles["body"]), Paragraph("", styles["body"])]],
+        colWidths=[90 * mm, 73 * mm],
+    )
+    sig_line.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(sig_line)
+    story.append(Paragraph(f"<b>{physio_name}</b>", styles["body"]))
+    if reg_no:
+        story.append(Paragraph(reg_no, styles["small"]))
+
+    if brand.footer:
+        story.append(Spacer(1, 6 * mm))
+        story.append(Paragraph(brand.footer, styles["small"]))
+
+    return _build(story, f"Prescription {prx_id}", "Clinical Prescription", brand)

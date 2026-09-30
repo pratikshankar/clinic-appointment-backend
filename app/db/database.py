@@ -30,7 +30,7 @@ def _engine_kwargs() -> dict[str, Any]:
     return kwargs
 
 
-engine: Engine = create_engine(settings.DATABASE_URL, **_engine_kwargs())
+engine: Engine = create_engine(settings.effective_database_url, **_engine_kwargs())
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
 
@@ -39,11 +39,12 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, futu
 def _set_sqlite_pragmas(dbapi_connection, connection_record):  # pragma: no cover
     """SQLite ignores FOREIGN KEY constraints unless explicitly enabled.
 
-    Without this, the local database would silently accept rows that PostgreSQL
-    would reject, which is exactly the class of bug that makes a later migration
-    painful.
+    Check the actual connection type rather than settings so this is safe
+    when multiple engines with different dialects exist (e.g. Alembic targeting
+    PostgreSQL while the app uses SQLite via USE_LOCAL_DB).
     """
-    if not settings.is_sqlite:
+    import sqlite3
+    if not isinstance(dbapi_connection, sqlite3.Connection):
         return
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")

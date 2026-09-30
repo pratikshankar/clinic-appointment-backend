@@ -18,7 +18,10 @@ from app.schemas.billing import (
     BillCreate,
     BillRead,
     BillSummaryRow,
+    BillUpdate,
     PaymentInput,
+    PaymentModeBreakdown,
+    PaymentUpdate,
     ServiceItemCreate,
     ServiceItemRead,
     ServiceItemUpdate,
@@ -108,7 +111,7 @@ def update_service_item(
     "/{patient_id}/bills", response_model=list[BillRead], summary="Bills for a patient"
 )
 def list_patient_bills(patient_id: int, db: DbSession, current_user: ClinicStaffUser):
-    bills, _ = billing_service.list_bills(
+    bills, _, _period = billing_service.list_bills(
         db, current_user, patient_id=patient_id, limit=200
     )
     return [BillRead.model_validate(bill) for bill in bills]
@@ -145,11 +148,13 @@ def list_bills(
     payment_status: PaymentStatus | None = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
+    payment_date_from: Annotated[date | None, Query(alias="payment_from")] = None,
+    payment_date_to: Annotated[date | None, Query(alias="payment_to")] = None,
     search: Annotated[str | None, Query(max_length=100)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ):
-    bills, total = billing_service.list_bills(
+    bills, total, period_map = billing_service.list_bills(
         db,
         current_user,
         clinic_id=clinic_id,
@@ -157,16 +162,19 @@ def list_bills(
         payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
+        payment_date_from=payment_date_from,
+        payment_date_to=payment_date_to,
         search=search,
         offset=(page - 1) * page_size,
         limit=page_size,
     )
-    return Page[BillSummaryRow](
-        items=[BillSummaryRow.model_validate(bill) for bill in bills],
-        total=total,
-        page=page,
-        page_size=page_size,
-    )
+    items = []
+    for bill in bills:
+        row = BillSummaryRow.model_validate(bill)
+        if period_map:
+            row = row.model_copy(update={"amount_paid_in_period": period_map.get(bill.id)})
+        items.append(row)
+    return Page[BillSummaryRow](items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get(
@@ -178,9 +186,39 @@ def billing_counters(
     return BillCounters(**billing_service.billing_counters(db, current_user, clinic_id))
 
 
+@router.get(
+    "/payment-breakdown",
+    response_model=PaymentModeBreakdown,
+    summary="Payment totals by method (Cash / UPI / Card) for a date range",
+)
+def payment_breakdown(
+    db: DbSession,
+    current_user: ClinicStaffUser,
+    clinic_id: int | None = None,
+    date_from: Annotated[date | None, Query(alias="from")] = None,
+    date_to: Annotated[date | None, Query(alias="to")] = None,
+):
+    return PaymentModeBreakdown(
+        **billing_service.payment_mode_breakdown(db, current_user, clinic_id, date_from, date_to)
+    )
+
+
 @router.get("/{bill_id}", response_model=BillRead, summary="One bill with its lines")
 def get_bill(bill_id: int, db: DbSession, current_user: ClinicStaffUser):
     return BillRead.model_validate(billing_service.get_bill(db, current_user, bill_id))
+
+
+@router.put("/{bill_id}", response_model=BillRead, summary="Correct bill date or notes")
+def update_bill(
+    bill_id: int,
+    payload: BillUpdate,
+    request: Request,
+    db: DbSession,
+    current_user: ClinicStaffUser,
+):
+    return BillRead.model_validate(
+        billing_service.update_bill(db, current_user, bill_id, payload, request=request)
+    )
 
 
 @router.post(
@@ -251,6 +289,23 @@ def send_invoice(
     result = DeliveryResult.model_validate(message)
     result.filename = filename
     return result
+
+
+@payment_router.put(
+    "/{payment_id}",
+    response_model=BillRead,
+    summary="Correct date, method or reference on a payment",
+)
+def update_payment(
+    payment_id: int,
+    payload: PaymentUpdate,
+    request: Request,
+    db: DbSession,
+    current_user: ClinicStaffUser,
+):
+    return BillRead.model_validate(
+        billing_service.update_payment(db, current_user, payment_id, payload, request=request)
+    )
 
 
 @payment_router.get("/{payment_id}/receipt.pdf", summary="Download the payment receipt")

@@ -313,6 +313,38 @@ def deliver(db: Session, message_ids: list[int]) -> list[MessageResult]:
     return results
 
 
+def push_for_appointment(
+    db: Session,
+    actor: User,
+    appointment: Appointment,
+    event: AppointmentEvent | None,
+) -> None:
+    """Fire a Web Push to the clinic's subscribed devices after an appointment event.
+
+    Call after deliver() — this is post-commit and best-effort.
+    """
+    if event is None:
+        return
+    if not should_notify_clinic(actor, appointment.clinic_id):
+        return
+
+    from app.services import push_service
+
+    patient = appointment.patient
+    body = " · ".join(
+        filter(
+            None,
+            [
+                patient.full_name if patient else None,
+                _date_text(appointment),
+                slot_time_text(appointment),
+                appointment.clinic.name if appointment.clinic else None,
+            ],
+        )
+    )
+    push_service.send_to_clinic(db, appointment.clinic_id, event.headline, body)
+
+
 def _send_one(message: OutboundMessage) -> MessageResult:
     """Dispatch a single queued message to the correct provider."""
     if message.channel == MessageChannel.EMAIL:

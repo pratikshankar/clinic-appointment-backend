@@ -22,6 +22,8 @@ import io
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+
+from app.utils.timezone import local_today
 from decimal import Decimal
 
 from sqlalchemy import Select, and_, case, func, select
@@ -80,7 +82,7 @@ def resolve_window(
     """Work out what range and which clinics this report covers."""
     from app.utils.exceptions import ValidationError
 
-    today = date.today()
+    today = local_today()
     end = date_to or today
     start = date_from or (end - timedelta(days=default_days - 1))
     if start > end:
@@ -1093,7 +1095,7 @@ def retention_report(
     off the **last delivered session**, not the package start, so someone
     part-way through a course counts from their last visit.
     """
-    cutoff = date.today() - timedelta(days=dropout_days)
+    cutoff = local_today() - timedelta(days=dropout_days)
 
     last_session = (
         select(
@@ -1140,7 +1142,7 @@ def retention_report(
                 "sessions_taken": package.sessions_taken,
                 "sessions_remaining": remaining,
                 "last_seen": last_date,
-                "days_since": (date.today() - reference).days,
+                "days_since": (local_today() - reference).days,
                 "value_at_risk": money(package.price_per_session * remaining),
             }
         )
