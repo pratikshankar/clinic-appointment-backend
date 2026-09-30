@@ -1,0 +1,40 @@
+# --- secrets and local configuration ---
+.env
+.env.*
+!.env.example
+*.local
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- local databases ---
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# --- node / frontend ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+npm-debug.log*
+yarn-error.log*
+
+# --- editors and OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
